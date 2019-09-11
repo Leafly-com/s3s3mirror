@@ -86,7 +86,35 @@ public class KeyCopyJob extends KeyJob {
                 if (verbose) log.info("successfully copied (on try #" + tries + "): " + key + " to: " + keydest);
                 return true;
             } catch (AmazonS3Exception s3e) {
-                log.error("s3 exception copying (try #" + tries + ") " + key + " to: " + keydest + ": " + s3e);
+                if (s3e.getStatusCode() == 400 && "Couldn't parse the specified URI.".equals(s3e.getErrorMessage())) { // Try a GET then PUT when we have invalid characters
+                    GetObjectRequest req = new GetObjectRequest(options.getSourceBucket(), key);
+                    try {
+                        S3Object s3Obj = client.getObject(req);
+                        PutObjectRequest putReq = new PutObjectRequest(options.getDestinationBucket(), keydest, s3Obj.getObjectContent(), sourceMetadata);
+
+                        putReq.setStorageClass(StorageClass.valueOf(options.getStorageClass()));
+
+                        if (options.isEncrypt()) {
+                            putReq.putCustomRequestHeader("x-amz-server-side-encryption", "AES256");
+                        }
+
+                        if (options.isCrossAccountCopy()) {
+                            putReq.setCannedAcl(CannedAccessControlList.BucketOwnerFullControl);
+                        } else {
+                            putReq.setAccessControlList(objectAcl);
+                        }
+
+                        client.putObject(putReq);
+                        stats.bytesCopied.addAndGet(sourceMetadata.getContentLength());
+                        return true;
+                    } catch (AmazonS3Exception s3e2) {
+                        log.error("s3 exception copying (try #" + tries + ") " + key + " to: " + keydest + ": " + s3e2);
+                    } catch (Exception e) {
+                        log.error("unexpected exception copying (try #" + tries + ") " + key + " to: " + keydest + ": " + e);
+                    }
+                } else {
+                    log.error("s3 exception copying (try #" + tries + ") " + key + " to: " + keydest + ": " + s3e);
+                }
             } catch (Exception e) {
                 log.error("unexpected exception copying (try #" + tries + ") " + key + " to: " + keydest + ": " + e);
             }
